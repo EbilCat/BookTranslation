@@ -14,10 +14,6 @@ from src.config import Config, load_config
 __all__ = ["run_inference"]
 
 
-# --------------------------------------------------------------------------- #
-# Public API
-# --------------------------------------------------------------------------- #
-
 def run_inference(prompt: str, config: Config) -> str:
     """Send a single prompt to SEA-LION and return the assistant's reply.
 
@@ -49,10 +45,6 @@ def run_inference(prompt: str, config: Config) -> str:
     data = response.json()
     return data["choices"][0]["message"]["content"]
 
-
-# --------------------------------------------------------------------------- #
-# Entry point
-# --------------------------------------------------------------------------- #
 
 def test_inference() -> str:
     """Smoke test: load config, query the model, and print the reply."""

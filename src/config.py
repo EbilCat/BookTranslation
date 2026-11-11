@@ -8,13 +8,19 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-__all__ = ["Config", "load_config"]
+__all__ = ["Config", "load_config", "SUPPORTED_LANGUAGES"]
 
+# Supported target languages, mapping the configurable short code to the full
+# language name (used for prompts, CLI help, and validation).
+SUPPORTED_LANGUAGES = {
+    "id": "Indonesian",
+    "fil": "Filipino",
+    "ta": "Tamil",
+    "th": "Thai",
+    "vi": "Vietnamese",
+}
 
-# --------------------------------------------------------------------------- #
-# Constants
-# --------------------------------------------------------------------------- #
-
+# Default target language code (must be a key in SUPPORTED_LANGUAGES).
 DEFAULT_TARGET_LANGUAGE = "id"
 
 # SEA-LION API connection details.
@@ -31,9 +37,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
 
-# --------------------------------------------------------------------------- #
-# Public API
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Config:
     """Resolved, immutable application settings."""
@@ -50,8 +53,8 @@ def load_config(target_language: str | None = None) -> Config:
     """Build a Config, reading secrets and settings from the environment.
 
     Args:
-        target_language: Language code from the CLI; falls back to the
-            TARGET_LANGUAGE env var, then the default.
+        target_language: Language code supplied on the command line; falls
+            back to the default when not given.
 
     Returns:
         A populated Config instance.
@@ -66,14 +69,9 @@ def load_config(target_language: str | None = None) -> Config:
             "(see .env.example)."
         )
 
-    language = (
-        target_language
-        or os.getenv("TARGET_LANGUAGE")
-        or DEFAULT_TARGET_LANGUAGE
-    )
     return Config(
         api_key=api_key,
-        target_language=language,
+        target_language=target_language or DEFAULT_TARGET_LANGUAGE,
         base_url=os.getenv("SEA_LION_BASE_URL") or DEFAULT_BASE_URL,
         model=os.getenv("SEA_LION_MODEL") or DEFAULT_MODEL,
         timeout=float(os.getenv("SEA_LION_TIMEOUT") or DEFAULT_TIMEOUT),

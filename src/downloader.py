@@ -13,10 +13,6 @@ import httpx
 __all__ = ["download", "download_to_file"]
 
 
-# --------------------------------------------------------------------------- #
-# Public API
-# --------------------------------------------------------------------------- #
-
 def download(url: str, timeout: float = 60.0) -> str:
     r"""Download a plain-text resource and return its contents.
 
@@ -75,18 +71,10 @@ def download_to_file(
     return text
 
 
-# --------------------------------------------------------------------------- #
-# Internal helpers
-# --------------------------------------------------------------------------- #
-
 def _normalize_newlines(text: str) -> str:
     r"""Normalize CRLF and lone CR line endings to LF (``\n``)."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
-
-# --------------------------------------------------------------------------- #
-# Entry point
-# --------------------------------------------------------------------------- #
 
 def main() -> None:
     """Download the configured source book into ``output/source.txt``."""
