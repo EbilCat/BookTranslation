@@ -1,58 +1,98 @@
-"""Minimal SEA-LION inference helpers built directly on httpx.
+"""Async SEA-LION inference helpers built on the OpenAI SDK.
 
-The SEA-LION API is OpenAI-compatible, so we POST to the standard
-``/chat/completions`` endpoint with a Bearer token and read the assistant
-message back out of the JSON response.
+The SEA-LION API is OpenAI-compatible, so we use ``AsyncOpenAI`` pointed at the
+SEA-LION base URL. The async client lets the translator run many calls
+concurrently (bounded by a rate limiter), and its built-in, Retry-After-aware
+backoff handles transient failures.
 """
 
 from __future__ import annotations
 
-import httpx
+from openai import AsyncOpenAI
 
-from src.config import Config, load_config
+from src.config import Config
 
-__all__ = ["run_inference"]
+__all__ = ["build_client", "run_inference", "TranslationTruncatedError"]
+
+# Client-side retries for transient errors (429/5xx); the SDK honours
+# Retry-After and backs off exponentially between attempts.
+_MAX_RETRIES = 5
 
 
-def run_inference(prompt: str, config: Config) -> str:
-    """Send a single prompt to SEA-LION and return the assistant's reply.
+class TranslationTruncatedError(RuntimeError):
+    """Raised when the model stops because it hit the output token cap."""
+
+
+def build_client(config: Config) -> AsyncOpenAI:
+    """Create an AsyncOpenAI client pointed at the SEA-LION API."""
+    return AsyncOpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=config.timeout,
+        max_retries=_MAX_RETRIES,
+    )
+
+
+async def run_inference(
+    client: AsyncOpenAI,
+    prompt: str,
+    config: Config,
+    *,
+    system: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """Send one chat completion and return the assistant's reply text.
 
     Args:
+        client: An AsyncOpenAI client (see :func:`build_client`).
         prompt: The user message to send.
-        config: Resolved application settings (API key, model, base URL,
-            request timeout).
+        config: Resolved application settings (provides the model).
+        system: Optional system message prepended to the conversation.
+        max_tokens: Optional cap on output tokens. When the response is cut off
+            at this cap, a TranslationTruncatedError is raised.
 
     Returns:
         The text content of the model's response.
 
     Raises:
-        httpx.HTTPStatusError: if the API returns a non-2xx status.
+        TranslationTruncatedError: if the response was truncated at max_tokens.
+        openai.OpenAIError: on an API error the client could not recover from.
     """
-    response = httpx.post(
-        f"{config.base_url}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": config.model,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=config.timeout,
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = await client.chat.completions.create(
+        model=config.model,
+        messages=messages,  # type: ignore[arg-type]
+        max_tokens=max_tokens,
     )
-    response.raise_for_status()
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        raise TranslationTruncatedError(
+            f"Response truncated at max_tokens={max_tokens}."
+        )
+    return choice.message.content or ""
 
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
 
-
-def test_inference() -> str:
+async def test_inference() -> str:
     """Smoke test: load config, query the model, and print the reply."""
+    from src.config import load_config
+
     config = load_config()
-    reply = run_inference("How many days are there in a year?", config)
+    client = build_client(config)
+    try:
+        reply = await run_inference(
+            client, "How many days are there in a year?", config
+        )
+    finally:
+        await client.close()
     print(reply)
     return reply
 
 
 if __name__ == "__main__":
-    test_inference()
+    import asyncio
+
+    asyncio.run(test_inference())
