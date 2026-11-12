@@ -19,6 +19,9 @@ from src.translator import translate_text
 _SOURCE_CACHE = "output/source.txt"
 _OUTPUT_TEMPLATE = "output/translated_{language}.txt"
 
+# Directory for the resumable per-chunk translation cache (git-ignored).
+_TRANSLATION_CACHE_DIR = "processing/translation_cache"
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -58,6 +61,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Translate the text as-is, without stripping Gutenberg boilerplate.",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the resumable per-chunk translation cache "
+        "(translate every chunk afresh).",
+    )
     return parser.parse_args(argv)
 
 
@@ -83,7 +92,8 @@ async def _run(args: argparse.Namespace) -> None:
         text = strip_boilerplate(text)
     print(f"Translating {len(text):,} characters to {language} ...")
 
-    translated = await translate_text(text, config)
+    cache_dir = None if args.no_cache else _TRANSLATION_CACHE_DIR
+    translated = await translate_text(text, config, cache_dir=cache_dir)
 
     output_path = Path(
         args.output or _OUTPUT_TEMPLATE.format(language=config.target_language)

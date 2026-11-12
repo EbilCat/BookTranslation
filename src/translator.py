@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections import deque
+from pathlib import Path
 
+from src.cache import ChunkCache
 from src.chunker import chunk_text, estimate_tokens
 from src.config import SUPPORTED_LANGUAGES, Config
 from src.inference import (
@@ -39,12 +41,23 @@ _MIN_OUTPUT_TOKENS = 256
 _PROMPT_OVERHEAD_TOKENS = 500
 
 
-async def translate_text(text: str, config: Config) -> str:
+async def translate_text(
+    text: str,
+    config: Config,
+    *,
+    cache_dir: str | Path | None = None,
+) -> str:
     """Translate plain text and return the reassembled translation.
+
+    When ``cache_dir`` is given, each chunk's translation is written to disk as
+    it completes and reused on a later run, so an interrupted translation can
+    resume instead of re-translating (and re-paying for) chunks already done.
 
     Args:
         text: Plain text to translate (already preprocessed by the caller).
         config: Resolved application settings (model, target language, limits).
+        cache_dir: Directory for the resumable per-chunk translation cache.
+            ``None`` disables caching (every chunk is translated afresh).
 
     Returns:
         The translated text, chunks rejoined in order with blank lines.
@@ -55,12 +68,26 @@ async def translate_text(text: str, config: Config) -> str:
     limiter = _RateLimiter(_RATE_LIMIT_RPM)
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
     progress = _Progress(len(chunks))
+    cache = (
+        ChunkCache(
+            cache_dir,
+            language=config.target_language,
+            model=config.model,
+        )
+        if cache_dir is not None
+        else None
+    )
 
     async def worker(index: int, chunk: str) -> tuple[int, str]:
+        if cache is not None:
+            cached = cache.get(chunk)
+            if cached is not None:
+                await progress.tick(cached=True)
+                return index, cached
         async with semaphore:
-            translated = await _translate_chunk(
-                client, chunk, config, system, limiter
-            )
+            translated = await _translate_chunk(client, chunk, config, system, limiter)
+        if cache is not None:
+            cache.set(chunk, translated)
         await progress.tick()
         return index, translated
 
@@ -106,14 +133,23 @@ class _Progress:
     def __init__(self, total: int) -> None:
         self._total = total
         self._done = 0
+        self._cached = 0
         self._lock = asyncio.Lock()
 
-    async def tick(self) -> None:
-        """Record one completed chunk and print progress to stderr."""
+    async def tick(self, *, cached: bool = False) -> None:
+        """Record one finished chunk and print progress to stderr.
+
+        Args:
+            cached: True if the chunk was served from the resume cache rather
+                than freshly translated; tallied and shown in the progress line.
+        """
         async with self._lock:
             self._done += 1
+            if cached:
+                self._cached += 1
+            suffix = f" ({self._cached} resumed from cache)" if self._cached else ""
             print(
-                f"  translated {self._done}/{self._total} chunks",
+                f"  translated {self._done}/{self._total} chunks{suffix}",
                 end="\r",
                 file=sys.stderr,
                 flush=True,
@@ -124,9 +160,7 @@ class _Progress:
 
 def _system_prompt(config: Config) -> str:
     """Build the translation system prompt for the configured language."""
-    language = SUPPORTED_LANGUAGES.get(
-        config.target_language, config.target_language
-    )
+    language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
     return (
         f"You are a professional literary translator. Translate the user's "
         f"text into {language}. Preserve the original meaning, tone, paragraph "
@@ -155,7 +189,11 @@ async def _translate_chunk(
     # is too big — split it (or fail if it's a single paragraph).
     if output_cap <= _MIN_OUTPUT_TOKENS:
         return await _split_and_retry(
-            client, chunk, config, system, limiter,
+            client,
+            chunk,
+            config,
+            system,
+            limiter,
             reason="exceeds the context window",
         )
 
@@ -169,7 +207,11 @@ async def _translate_chunk(
         )
     except TranslationTruncatedError:
         return await _split_and_retry(
-            client, chunk, config, system, limiter,
+            client,
+            chunk,
+            config,
+            system,
+            limiter,
             reason="was truncated",
         )
 
@@ -186,9 +228,7 @@ async def _split_and_retry(
     """Split a chunk into smaller pieces and translate each, else give up."""
     pieces = _split_chunk(chunk)
     if len(pieces) == 1:
-        raise RuntimeError(
-            f"A single paragraph {reason} and cannot be split further."
-        )
+        raise RuntimeError(f"A single paragraph {reason} and cannot be split further.")
     parts = [
         await _translate_chunk(client, piece, config, system, limiter)
         for piece in pieces
