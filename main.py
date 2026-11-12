@@ -20,8 +20,10 @@ from src.evaluator import DEFAULT_SAMPLE_SIZE, evaluate_translation
 from src.gutenberg import strip_boilerplate
 from src.translator import TranslationFailedError, translate_text
 
-# Where the downloaded source book is cached, and the default output template.
-_SOURCE_CACHE = "output/source.txt"
+# Where the downloaded source book is cached (an input we fetch, so it lives
+# under processing/ alongside the chunk cache, not with the output artifacts),
+# and the default output template.
+_SOURCE_CACHE = "processing/source.txt"
 _OUTPUT_TEMPLATE = "output/{language}/translated_{language}.txt"
 
 # Default location (without extension) for the judge's quality report.

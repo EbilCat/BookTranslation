@@ -77,12 +77,12 @@ def _normalize_newlines(text: str) -> str:
 
 
 def main() -> None:
-    """Download the configured source book into ``output/source.txt``."""
+    """Download the configured source book into ``processing/source.txt``."""
     from src.config import load_config
 
     config = load_config()
     text = download_to_file(
-        config.book_url, "output/source.txt", timeout=config.timeout
+        config.book_url, "processing/source.txt", timeout=config.timeout
     )
     print(f"Downloaded {len(text):,} characters from {config.book_url}")
 
