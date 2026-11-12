@@ -15,15 +15,15 @@ import sys
 from pathlib import Path
 
 from src.config import SUPPORTED_LANGUAGES, load_config, load_judge_config
-from src.downloader import download_to_file
+from src.downloader import download_cached
 from src.evaluator import DEFAULT_SAMPLE_SIZE, evaluate_translation
 from src.gutenberg import strip_boilerplate
 from src.translator import TranslationFailedError, translate_text
 
-# Where the downloaded source book is cached (an input we fetch, so it lives
-# under processing/ alongside the chunk cache, not with the output artifacts),
-# and the default output template.
-_SOURCE_CACHE = "processing/source.txt"
+# Where downloaded source books are cached (an input we fetch, so it lives under
+# processing/ alongside the chunk cache, not with the output artifacts). The
+# cache file is keyed by URL, so changing --book-url fetches the right book.
+_SOURCE_CACHE_DIR = "processing"
 _OUTPUT_TEMPLATE = "output/{language}/translated_{language}.txt"
 
 # Default location (without extension) for the judge's quality report.
@@ -137,9 +137,9 @@ async def _run(args: argparse.Namespace) -> None:
     language = config.language_name
 
     print(f"Downloading book from {config.book_url} ...")
-    text = download_to_file(
+    text = download_cached(
         config.book_url,
-        _SOURCE_CACHE,
+        _SOURCE_CACHE_DIR,
         force=args.force_download,
         timeout=config.timeout,
     )

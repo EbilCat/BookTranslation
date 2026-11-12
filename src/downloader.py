@@ -6,11 +6,12 @@ optional on-disk cache so repeated runs don't re-download the same URL.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import httpx
 
-__all__ = ["download", "download_to_file"]
+__all__ = ["download", "download_cached", "download_to_file", "source_cache_path"]
 
 
 def download(url: str, timeout: float = 60.0) -> str:
@@ -71,19 +72,65 @@ def download_to_file(
     return text
 
 
+def source_cache_path(url: str, cache_dir: str | Path) -> Path:
+    """Return the URL-keyed cache path for ``url`` under ``cache_dir``.
+
+    The filename embeds a hash of the URL so distinct sources never share a
+    cache file: requesting a different URL misses (and downloads afresh) instead
+    of silently reusing a previously cached, unrelated resource.
+
+    Args:
+        url: The resource URL the cache entry is for.
+        cache_dir: Directory the cache file lives in.
+
+    Returns:
+        ``<cache_dir>/source_<16-hex-digest>.txt``.
+    """
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return Path(cache_dir) / f"source_{digest}.txt"
+
+
+def download_cached(
+    url: str,
+    cache_dir: str | Path,
+    *,
+    force: bool = False,
+    timeout: float = 60.0,
+) -> str:
+    """Download ``url`` into a URL-keyed file under ``cache_dir`` (cached).
+
+    Unlike :func:`download_to_file` with a fixed path, the cache file is named
+    from the URL (see :func:`source_cache_path`), so switching to a different
+    URL downloads that URL instead of reusing the last one.
+
+    Args:
+        url: URL to fetch.
+        cache_dir: Directory to store the cache file in.
+        force: Re-download even if the cached file already exists.
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        The decoded text, whether freshly downloaded or read from cache.
+
+    Raises:
+        httpx.HTTPStatusError: if a download is attempted and fails.
+    """
+    return download_to_file(
+        url, source_cache_path(url, cache_dir), force=force, timeout=timeout
+    )
+
+
 def _normalize_newlines(text: str) -> str:
     r"""Normalize CRLF and lone CR line endings to LF (``\n``)."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def main() -> None:
-    """Download the configured source book into ``processing/source.txt``."""
+    """Download the configured source book into the ``processing/`` cache."""
     from src.config import load_config
 
     config = load_config()
-    text = download_to_file(
-        config.book_url, "processing/source.txt", timeout=config.timeout
-    )
+    text = download_cached(config.book_url, "processing", timeout=config.timeout)
     print(f"Downloaded {len(text):,} characters from {config.book_url}")
 
 

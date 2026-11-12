@@ -79,7 +79,7 @@ cached progress is preserved for a later rerun.
 | --- | --- |
 | `output/<language>/translated_<language>.txt` | The translated book (deliverable). |
 | `output/<language>/judge_report.{json,md}` | Quality report, with `--judge`. |
-| `processing/source.txt` | The downloaded source book (cached input). |
+| `processing/source_<hash>.txt` | The downloaded source book, cached per URL. |
 | `processing/translation_cache/` | Per-chunk resume cache. |
 
 Both `output/` and `processing/` are git-ignored.
