@@ -1,0 +1,122 @@
+# Book Translation
+
+Translate a public-domain book into a Southeast Asian language using the
+[SEA-LION API](https://docs.sea-lion.ai/guides/inferencing/api).
+
+The app downloads a plain-text book (defaults to a
+[Project Gutenberg](https://www.gutenberg.org/cache/epub/16317/pg16317.txt)
+title), strips the Gutenberg boilerplate, splits it into paragraph-aligned
+chunks, translates the chunks concurrently (rate-limited and resumable), and
+writes the translated book to a local file. An optional
+[LLM-as-a-judge](#optional-translation-quality-evaluation) step scores a sample
+of the translation for quality.
+
+Supported target languages: **Indonesian** (`id`, default), **Filipino**
+(`fil`), **Tamil** (`ta`), **Thai** (`th`), **Vietnamese** (`vi`).
+
+## Requirements
+
+- **Python 3.13+** (pinned in `pyproject.toml`)
+- **[uv](https://docs.astral.sh/uv/)** for dependency management
+- A **SEA-LION API key** — get one at
+  https://docs.sea-lion.ai/guides/inferencing/api
+
+## Setup
+
+```bash
+# 1. Install dependencies into a local virtual environment
+uv sync
+
+# 2. Create your .env from the template and add your key(s)
+cp .env.example .env
+#   then edit .env and set SEA_LION_API_KEY=...
+```
+
+`.env` is git-ignored — never commit real secrets.
+
+## Usage
+
+Run with `uv run`, which uses the project's virtual environment:
+
+```bash
+# Translate the default book into the default language (Indonesian)
+uv run main.py
+
+# Choose a target language (configurable, as required)
+uv run main.py --language th
+
+# Translate a different plain-text book
+uv run main.py --language vi --book-url https://www.gutenberg.org/cache/epub/1342/pg1342.txt
+```
+
+The translated book is written to
+`output/<language>/translated_<language>.txt` (e.g. `output/th/translated_th.txt`).
+
+### Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-l`, `--language CODE` | `id` | Target language: `id`, `fil`, `ta`, `th`, `vi`. |
+| `-u`, `--book-url URL` | the Gutenberg default | Source book (plain-text URL). |
+| `-o`, `--output PATH` | `output/<language>/translated_<language>.txt` | Output file path. |
+| `--force-download` | off | Re-download the book even if a cached copy exists. |
+| `--raw` | off | Translate as-is, without stripping Gutenberg boilerplate. |
+| `--no-cache` | off | Disable the resumable per-chunk cache (translate every chunk afresh). |
+| `--max-attempts N` | `3` | Whole-book translation passes before giving up (retries transient failures). |
+| `--judge` | off | After translating, score a sample of chunks (see below). |
+| `--judge-sample N` | `8` | Number of chunks the judge scores. |
+| `--judge-seed SEED` | random | RNG seed for a reproducible judge sample. |
+
+Translation is **resumable**: each chunk's result is cached on disk as it
+completes, so an interrupted run (crash, Ctrl-C, rate-limit give-up) resumes
+instead of re-translating — and re-paying for — chunks already done. If chunks
+still fail after `--max-attempts` passes, no output file is written and the
+cached progress is preserved for a later rerun.
+
+### Where files go
+
+| Path | Contents |
+| --- | --- |
+| `output/<language>/translated_<language>.txt` | The translated book (deliverable). |
+| `output/<language>/judge_report.{json,md}` | Quality report, with `--judge`. |
+| `processing/source.txt` | The downloaded source book (cached input). |
+| `processing/translation_cache/` | Per-chunk resume cache. |
+
+Both `output/` and `processing/` are git-ignored.
+
+## Optional: translation-quality evaluation
+
+With `--judge`, a separate judge model (Google Gemini, via its
+OpenAI-compatible endpoint) scores a random sample of the translated chunks
+against the English source on a per-dimension rubric (accuracy, fluency,
+completeness, tone; 1–5). Using a different provider avoids self-evaluation
+bias and keeps off SEA-LION's rate budget.
+
+It requires a **`GEMINI_API_KEY`** in `.env` (free tier works; get one at
+https://aistudio.google.com/apikey) and reads the translations from the chunk
+cache, so it cannot be combined with `--no-cache`.
+
+```bash
+uv run main.py --language th --judge --judge-sample 10
+```
+
+The report is written to `output/<language>/judge_report.json` and
+`.md`.
+
+## Configuration
+
+Secrets and operational settings are read from the environment (`.env`). The
+two keys above are all you need; the rest are optional overrides with sensible
+defaults. See [`.env.example`](.env.example) for the full list (base URLs,
+timeouts, model, context window, and the judge model/endpoint). Target language
+and book URL are **CLI arguments**, not env vars.
+
+## Running the tests
+
+```bash
+uv run pytest
+```
+
+The suite covers the pure, I/O-free logic (chunking, token budgeting, retry
+classification, judge-reply parsing, score aggregation, config validation,
+caching) and runs offline — no API key or network required.
