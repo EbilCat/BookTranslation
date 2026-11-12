@@ -46,7 +46,11 @@ DEFAULT_BOOK_URL = "https://www.gutenberg.org/cache/epub/16317/pg16317.txt"
 # and never grades a model's own output. Gemini exposes an OpenAI-compatible
 # endpoint, so the same AsyncOpenAI client works (see Decision 1).
 JUDGE_DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-JUDGE_DEFAULT_MODEL = "gemini-2.5-flash"
+# A "-latest" alias, so a model deprecation (e.g. gemini-2.5-flash being retired
+# for new keys) never breaks the default. Flash-Lite is free-tier, fast, and
+# returns clean JSON without a thinking budget. Override with JUDGE_MODEL for a
+# stronger judge (e.g. a current full-Flash model).
+JUDGE_DEFAULT_MODEL = "gemini-flash-lite-latest"
 JUDGE_DEFAULT_TIMEOUT = 120.0
 
 # Load variables from a .env file in the project root into os.environ.
