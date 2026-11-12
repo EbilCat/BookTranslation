@@ -24,8 +24,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-import openai
-
 from src.cache import ChunkCache
 from src.chunker import chunk_text, estimate_tokens
 from src.config import SUPPORTED_LANGUAGES, Config
@@ -35,40 +33,24 @@ from src.inference import (
     run_inference,
 )
 from src.ratelimit import RateLimiter
+from src.translation_policy import (
+    backoff_seconds,
+    build_system_prompt,
+    is_transient,
+    plan_output_budget,
+    split_chunk,
+)
 
 __all__ = ["translate_text", "TranslationFailedError"]
 
 # Default number of whole-book translation passes (initial + retries).
 _DEFAULT_MAX_ATTEMPTS = 3
 
-# Between retry passes, wait ``base * 2 ** (attempt - 1)`` seconds, capped, to
-# let a brief provider outage clear before slamming it again.
-_RETRY_BACKOFF_BASE = 3.0
-_RETRY_BACKOFF_CAP = 30.0
-
-# Transient errors worth retrying with another pass. APITimeoutError subclasses
-# APIConnectionError, so it is covered; RateLimitError is 429; InternalServer
-# Error covers 5xx. Anything else (auth, bad request, a paragraph that cannot be
-# split) is treated as permanent and aborts immediately.
-_TRANSIENT_ERRORS = (
-    openai.APIConnectionError,
-    openai.RateLimitError,
-    openai.InternalServerError,
-)
-
 # SEA-LION API rate limit (requests per minute per user).
 _RATE_LIMIT_RPM = 10
 
 # Maximum concurrent in-flight requests (the rate limiter still caps starts).
 _MAX_CONCURRENCY = 10
-
-# Output tokens are bounded at input_tokens * this factor (headroom for scripts
-# that expand relative to English), floored at _MIN_OUTPUT_TOKENS.
-_OUTPUT_EXPANSION = 3.0
-_MIN_OUTPUT_TOKENS = 256
-
-# Rough token allowance for the system prompt and chat formatting overhead.
-_PROMPT_OVERHEAD_TOKENS = 500
 
 
 class TranslationFailedError(RuntimeError):
@@ -150,7 +132,7 @@ async def translate_text(
         raise ValueError("max_attempts must be at least 1.")
 
     chunks = chunk_text(text)
-    system = _system_prompt(config)
+    system = build_system_prompt(config)
     language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
     cache = (
         ChunkCache(
@@ -176,28 +158,54 @@ async def translate_text(
         if not failures:
             break
 
-        permanent = [(i, e) for i, e in failures if not _is_transient(e)]
-        if permanent:
-            raise TranslationFailedError(
-                language,
-                [i for i, _ in failures],
-                attempt,
-                recoverable=False,
-                last_error=permanent[-1][1],
-            )
-
-        pending = [i for i, _ in failures]
-        if attempt == max_attempts:
-            raise TranslationFailedError(
-                language,
-                pending,
-                attempt,
-                recoverable=True,
-                last_error=failures[-1][1],
-            )
-        await asyncio.sleep(_backoff_seconds(attempt))
+        pending = _plan_retry(failures, language, attempt, max_attempts)
+        await asyncio.sleep(backoff_seconds(attempt))
 
     return "\n\n".join(translations[i] for i in range(len(chunks)))
+
+
+def _plan_retry(
+    failures: list[tuple[int, BaseException]],
+    language: str,
+    attempt: int,
+    max_attempts: int,
+) -> list[int]:
+    """Decide what to do after a pass left some chunks untranslated.
+
+    Args:
+        failures: ``(index, exception)`` for each chunk that failed this pass.
+        language: Target language name (for the error message).
+        attempt: The pass number that just ran (1-based).
+        max_attempts: Maximum number of whole-book passes allowed.
+
+    Returns:
+        The chunk indices to re-attempt on the next pass.
+
+    Raises:
+        TranslationFailedError: if translation must stop — either a permanent
+            (non-transient) failure, or transient failures on the final pass.
+    """
+    failed_indices = [index for index, _ in failures]
+    permanent_errors = [
+        (index, error) for index, error in failures if not is_transient(error)
+    ]
+    if permanent_errors:
+        raise TranslationFailedError(
+            language,
+            failed_indices,
+            attempt,
+            recoverable=False,
+            last_error=permanent_errors[-1][1],
+        )
+    if attempt == max_attempts:
+        raise TranslationFailedError(
+            language,
+            failed_indices,
+            attempt,
+            recoverable=True,
+            last_error=failures[-1][1],
+        )
+    return failed_indices
 
 
 class _Progress:
@@ -290,27 +298,6 @@ async def _run_pass(
     return failures
 
 
-def _is_transient(error: BaseException) -> bool:
-    """Return True if ``error`` is worth retrying with another pass."""
-    return isinstance(error, _TRANSIENT_ERRORS)
-
-
-def _backoff_seconds(attempt: int) -> float:
-    """Seconds to wait before the pass following a failed ``attempt``."""
-    return min(_RETRY_BACKOFF_BASE * 2 ** (attempt - 1), _RETRY_BACKOFF_CAP)
-
-
-def _system_prompt(config: Config) -> str:
-    """Build the translation system prompt for the configured language."""
-    language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
-    return (
-        f"You are a professional literary translator. Translate the user's "
-        f"text into {language}. Preserve the original meaning, tone, paragraph "
-        "structure, and line breaks. Output only the translation, with no "
-        "explanations, notes, or commentary."
-    )
-
-
 async def _translate_chunk(
     client,
     chunk: str,
@@ -324,12 +311,11 @@ async def _translate_chunk(
         RuntimeError: if a single, unsplittable paragraph cannot fit the
             context window or keeps getting truncated.
     """
-    input_tokens = estimate_tokens(chunk)
-    output_cap = config.context_window - input_tokens - _PROMPT_OVERHEAD_TOKENS
+    budget = plan_output_budget(estimate_tokens(chunk), config.context_window)
 
-    # Guard: if even a minimal response can't fit the context window, the chunk
-    # is too big — split it (or fail if it's a single paragraph).
-    if output_cap <= _MIN_OUTPUT_TOKENS:
+    # If even a minimal response can't fit the context window, the chunk is too
+    # big — split it (or fail if it's a single paragraph).
+    if budget is None:
         return await _split_and_retry(
             client,
             chunk,
@@ -339,13 +325,10 @@ async def _translate_chunk(
             reason="exceeds the context window",
         )
 
-    max_tokens = min(
-        int(input_tokens * _OUTPUT_EXPANSION) + _MIN_OUTPUT_TOKENS, output_cap
-    )
     await limiter.acquire()
     try:
         return await run_inference(
-            client, chunk, config, system=system, max_tokens=max_tokens
+            client, chunk, config, system=system, max_tokens=budget
         )
     except TranslationTruncatedError:
         return await _split_and_retry(
@@ -368,7 +351,7 @@ async def _split_and_retry(
     reason: str,
 ) -> str:
     """Split a chunk into smaller pieces and translate each, else give up."""
-    pieces = _split_chunk(chunk)
+    pieces = split_chunk(chunk)
     if len(pieces) == 1:
         raise RuntimeError(f"A single paragraph {reason} and cannot be split further.")
     parts = [
@@ -376,16 +359,3 @@ async def _split_and_retry(
         for piece in pieces
     ]
     return "\n\n".join(parts)
-
-
-def _split_chunk(chunk: str) -> list[str]:
-    """Split a chunk into two halves on paragraph boundaries.
-
-    Returns a single-element list when the chunk is one paragraph (cannot be
-    split without breaking a semantic unit).
-    """
-    paragraphs = chunk.split("\n\n")
-    if len(paragraphs) == 1:
-        return [chunk]
-    mid = len(paragraphs) // 2
-    return ["\n\n".join(paragraphs[:mid]), "\n\n".join(paragraphs[mid:])]
