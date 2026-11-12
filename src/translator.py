@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections import deque
 from pathlib import Path
 
 from src.cache import ChunkCache
@@ -23,6 +22,7 @@ from src.inference import (
     build_client,
     run_inference,
 )
+from src.ratelimit import RateLimiter
 
 __all__ = ["translate_text"]
 
@@ -65,7 +65,7 @@ async def translate_text(
     chunks = chunk_text(text)
     client = build_client(config)
     system = _system_prompt(config)
-    limiter = _RateLimiter(_RATE_LIMIT_RPM)
+    limiter = RateLimiter(_RATE_LIMIT_RPM)
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
     progress = _Progress(len(chunks))
     cache = (
@@ -100,31 +100,6 @@ async def translate_text(
 
     results = sorted(results)
     return "\n\n".join(translated for _, translated in results)
-
-
-class _RateLimiter:
-    """Async limiter capping starts to ``rpm`` within any rolling 60s window."""
-
-    def __init__(self, rpm: int) -> None:
-        self._rpm = rpm
-        self._window = 60.0
-        self._starts: deque[float] = deque()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        """Block until starting another request stays within the limit."""
-        async with self._lock:
-            loop = asyncio.get_running_loop()
-            self._evict(loop.time())
-            if len(self._starts) >= self._rpm:
-                await asyncio.sleep(self._window - (loop.time() - self._starts[0]))
-                self._evict(loop.time())
-            self._starts.append(loop.time())
-
-    def _evict(self, now: float) -> None:
-        """Drop start timestamps older than the rolling window."""
-        while self._starts and now - self._starts[0] >= self._window:
-            self._starts.popleft()
 
 
 class _Progress:
@@ -174,7 +149,7 @@ async def _translate_chunk(
     chunk: str,
     config: Config,
     system: str,
-    limiter: _RateLimiter,
+    limiter: RateLimiter,
 ) -> str:
     """Translate one chunk, splitting and retrying if it fails to fit.
 
@@ -221,7 +196,7 @@ async def _split_and_retry(
     chunk: str,
     config: Config,
     system: str,
-    limiter: _RateLimiter,
+    limiter: RateLimiter,
     *,
     reason: str,
 ) -> str:

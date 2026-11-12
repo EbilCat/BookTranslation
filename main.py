@@ -1,23 +1,30 @@
 """Command-line entry point: download a book and translate it via SEA-LION.
 
 Pipeline: parse args -> load config -> download (cached) -> translate the
-chunks concurrently -> write the translated text to a local file.
+chunks concurrently -> write the translated text to a local file. With
+``--judge``, a final LLM-as-a-judge step scores a sample of the translated
+chunks (see :mod:`src.evaluator`) and writes a quality report.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from pathlib import Path
 
-from src.config import SUPPORTED_LANGUAGES, load_config
+from src.config import SUPPORTED_LANGUAGES, load_config, load_judge_config
 from src.downloader import download_to_file
+from src.evaluator import DEFAULT_SAMPLE_SIZE, evaluate_translation
 from src.gutenberg import strip_boilerplate
 from src.translator import translate_text
 
 # Where the downloaded source book is cached, and the default output template.
 _SOURCE_CACHE = "output/source.txt"
 _OUTPUT_TEMPLATE = "output/{language}/translated_{language}.txt"
+
+# Default location (without extension) for the judge's quality report.
+_JUDGE_REPORT_TEMPLATE = "output/{language}/judge_report"
 
 # Directory for the resumable per-chunk translation cache (git-ignored).
 _TRANSLATION_CACHE_DIR = "processing/translation_cache"
@@ -49,8 +56,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-o",
         "--output",
         default=None,
-        help="Output file path "
-        "(default: output/<language>/translated_<language>.txt).",
+        help="Output file path (default: output/<language>/translated_<language>.txt).",
     )
     parser.add_argument(
         "--force-download",
@@ -68,7 +74,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the resumable per-chunk translation cache "
         "(translate every chunk afresh).",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="After translating, score a sample of chunks with the Gemini "
+        "LLM-as-a-judge and write a quality report (needs GEMINI_API_KEY).",
+    )
+    parser.add_argument(
+        "--judge-sample",
+        type=int,
+        default=DEFAULT_SAMPLE_SIZE,
+        metavar="N",
+        help=f"Number of chunks the judge scores (default: {DEFAULT_SAMPLE_SIZE}).",
+    )
+    parser.add_argument(
+        "--judge-seed",
+        type=int,
+        default=None,
+        metavar="SEED",
+        help="RNG seed for a reproducible judge sample (default: random).",
+    )
+    args = parser.parse_args(argv)
+    if args.judge and args.no_cache:
+        parser.error(
+            "--judge reads translations from the per-chunk cache, so it cannot "
+            "be combined with --no-cache."
+        )
+    return args
 
 
 def main() -> None:
@@ -102,6 +134,41 @@ async def _run(args: argparse.Namespace) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(translated, encoding="utf-8", newline="\n")
     print(f"Wrote translation to {output_path}")
+
+    if args.judge:
+        await _judge(args, config, text)
+
+
+async def _judge(args: argparse.Namespace, config, text: str) -> None:
+    """Run the LLM-as-a-judge evaluation and write a quality report."""
+    judge_config = load_judge_config()
+    language = SUPPORTED_LANGUAGES[config.target_language]
+    print(f"Judging up to {args.judge_sample} chunks with {judge_config.model} ...")
+    report = await evaluate_translation(
+        text,
+        config,
+        judge_config,
+        cache_dir=_TRANSLATION_CACHE_DIR,
+        sample_size=args.judge_sample,
+        seed=args.judge_seed,
+    )
+
+    report_base = Path(_JUDGE_REPORT_TEMPLATE.format(language=config.target_language))
+    report_base.parent.mkdir(parents=True, exist_ok=True)
+    json_path = report_base.with_suffix(".json")
+    md_path = report_base.with_suffix(".md")
+    json_path.write_text(
+        json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    md_path.write_text(report.to_markdown(), encoding="utf-8", newline="\n")
+
+    print(
+        f"Judge: overall {report.overall_mean():.2f}/5 "
+        f"across {report.sample_size} chunks ({language}). "
+        f"Reports: {md_path}, {json_path}"
+    )
 
 
 if __name__ == "__main__":
