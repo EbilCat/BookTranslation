@@ -10,9 +10,7 @@ before the text reaches here.
 
 from __future__ import annotations
 
-import argparse
 import re
-from pathlib import Path
 
 __all__ = ["estimate_tokens", "chunk_text"]
 
