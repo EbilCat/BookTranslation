@@ -5,7 +5,8 @@ scores a sample of translated chunks against the English source on a
 per-dimension rubric. Using a *different* provider than the translator keeps the
 judge off SEA-LION's 10 RPM budget and avoids a model grading its own output
 (self-evaluation bias). The per-chunk scores and rationales are aggregated into
-an :class:`EvaluationReport` (serialisable to JSON and Markdown).
+an :class:`~src.evaluation_report.EvaluationReport` (serialisable to JSON and
+Markdown).
 
 There is no gold-standard reference translation, so this is *quality
 estimation*: the judge sees ``(source, translation)`` and rates the translation
@@ -17,15 +18,16 @@ content in the content-addressed :class:`~src.cache.ChunkCache`. So judging runs
 against an already-translated book and relies on the per-chunk cache being
 populated (the default translation path; a ``--no-cache`` run leaves nothing to
 judge).
+
+This module holds the async orchestration only; the pure grading spec and reply
+parsing live in :mod:`src.judge_rubric`, and the aggregation/reporting in
+:mod:`src.evaluation_report`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import random
-import re
-from dataclasses import dataclass
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -33,6 +35,8 @@ from openai import AsyncOpenAI
 from src.cache import ChunkCache
 from src.chunker import chunk_text
 from src.config import Config, JudgeConfig
+from src.evaluation_report import ChunkEvaluation, EvaluationReport
+from src.judge_rubric import judge_prompt, judge_system, parse_judgement
 from src.ratelimit import RateLimiter
 
 __all__ = [
@@ -43,31 +47,6 @@ __all__ = [
     "collect_pairs",
     "evaluate_translation",
 ]
-
-# Rubric dimensions (key -> what the judge is asked to assess). Order is the
-# display order in the report.
-_DIMENSIONS: dict[str, str] = {
-    "accuracy": (
-        "Adequacy — does the translation faithfully convey the full meaning of "
-        "the source, with no mistranslations, additions, or distortions?"
-    ),
-    "fluency": (
-        "Fluency — is the translation natural, grammatical, idiomatic prose in "
-        "the target language (not awkward or obviously machine-translated)?"
-    ),
-    "completeness": (
-        "Completeness — is every sentence of the source rendered, with nothing "
-        "dropped, truncated, or left untranslated?"
-    ),
-    "tone": (
-        "Tone & style — are the register, literary style, and tone of the "
-        "source preserved?"
-    ),
-}
-
-# Inclusive integer score range applied to every dimension.
-_SCORE_MIN = 1
-_SCORE_MAX = 5
 
 # Judge request limits. The judge runs on its own provider/budget; a small
 # sample means the rolling-minute cap is rarely the binding constraint.
@@ -83,103 +62,6 @@ _JUDGE_PARSE_RETRIES = 1
 
 # Default number of chunks to sample when the caller does not specify.
 DEFAULT_SAMPLE_SIZE = 8
-
-
-@dataclass(frozen=True)
-class ChunkEvaluation:
-    """One judged (source, translation) chunk pair.
-
-    Attributes:
-        index: The chunk's position in reading order (0-based).
-        scores: Dimension key -> integer score in ``[_SCORE_MIN, _SCORE_MAX]``.
-        notes: Dimension key -> the judge's one-line justification.
-    """
-
-    index: int
-    scores: dict[str, int]
-    notes: dict[str, str]
-
-    @property
-    def mean(self) -> float:
-        """Mean score across all dimensions for this chunk."""
-        return sum(self.scores.values()) / len(self.scores)
-
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-serialisable view of this evaluation."""
-        return {
-            "index": self.index,
-            "mean": round(self.mean, 2),
-            "dimensions": {
-                dimension: {
-                    "score": self.scores[dimension],
-                    "note": self.notes[dimension],
-                }
-                for dimension in self.scores
-            },
-        }
-
-
-@dataclass(frozen=True)
-class EvaluationReport:
-    """Aggregated results of judging a sample of translated chunks.
-
-    Attributes:
-        language: Full target-language name (e.g. ``"Thai"``).
-        judge_model: The model that produced the judgements.
-        translation_model: The model whose translations were judged.
-        total_chunks: Number of chunks the whole book was split into.
-        evaluations: The per-chunk evaluations, in sampled order.
-    """
-
-    language: str
-    judge_model: str
-    translation_model: str
-    total_chunks: int
-    evaluations: list[ChunkEvaluation]
-
-    @property
-    def sample_size(self) -> int:
-        """Number of chunks actually judged."""
-        return len(self.evaluations)
-
-    def dimension_means(self) -> dict[str, float]:
-        """Mean score per dimension across the sampled chunks."""
-        if not self.evaluations:
-            return {dimension: 0.0 for dimension in _DIMENSIONS}
-        return {
-            dimension: sum(e.scores[dimension] for e in self.evaluations)
-            / len(self.evaluations)
-            for dimension in _DIMENSIONS
-        }
-
-    def overall_mean(self) -> float:
-        """Grand mean across every dimension of every sampled chunk."""
-        means = self.dimension_means().values()
-        return sum(means) / len(means) if means else 0.0
-
-    def weakest_chunks(self, limit: int = 3) -> list[ChunkEvaluation]:
-        """Return the lowest-scoring sampled chunks (most in need of review)."""
-        return sorted(self.evaluations, key=lambda e: e.mean)[:limit]
-
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-serialisable summary of the whole report."""
-        return {
-            "language": self.language,
-            "judge_model": self.judge_model,
-            "translation_model": self.translation_model,
-            "total_chunks": self.total_chunks,
-            "sample_size": self.sample_size,
-            "overall_mean": round(self.overall_mean(), 2),
-            "dimension_means": {
-                dimension: round(value, 2)
-                for dimension, value in self.dimension_means().items()
-            },
-            "evaluations": [e.to_dict() for e in self.evaluations],
-        }
-
-    def to_markdown(self) -> str:
-        """Render a human-readable Markdown report."""
-        return _render_markdown(self)
 
 
 class JudgeError(RuntimeError):
@@ -248,7 +130,8 @@ async def evaluate_translation(
         seed: Optional RNG seed for a reproducible sample.
 
     Returns:
-        An :class:`EvaluationReport` over the sampled chunks.
+        An :class:`~src.evaluation_report.EvaluationReport` over the sampled
+        chunks.
 
     Raises:
         JudgeError: if no translated chunks are available to judge.
@@ -310,8 +193,8 @@ async def _judge_pair(
     limiter: RateLimiter,
 ) -> ChunkEvaluation:
     """Send one (source, translation) pair to the judge and parse the result."""
-    system = _judge_system(language)
-    prompt = _judge_prompt(source, translation, language)
+    system = judge_system(language)
+    prompt = judge_prompt(source, translation, language)
     last_error: Exception | None = None
     for _ in range(_JUDGE_PARSE_RETRIES + 1):
         await limiter.acquire()
@@ -326,111 +209,8 @@ async def _judge_pair(
         )
         content = response.choices[0].message.content or ""
         try:
-            scores, notes = _parse_judgement(content)
+            scores, notes = parse_judgement(content)
             return ChunkEvaluation(index=index, scores=scores, notes=notes)
         except (ValueError, KeyError) as error:
             last_error = error
     raise JudgeError(f"Could not parse a judgement for chunk {index}: {last_error}")
-
-
-def _judge_system(language: str) -> str:
-    """Build the judge system prompt for the configured target language."""
-    rubric = "\n".join(f"- {key}: {desc}" for key, desc in _DIMENSIONS.items())
-    keys = ", ".join(f'"{key}"' for key in _DIMENSIONS)
-    return (
-        f"You are a meticulous, impartial translation-quality evaluator for "
-        f"English-to-{language} literary translation. You are given a source "
-        f"passage and its translation. Score the translation on each dimension "
-        f"from {_SCORE_MIN} (unacceptable) to {_SCORE_MAX} (excellent):\n"
-        f"{rubric}\n\n"
-        f"Respond with ONLY a JSON object (no markdown fences, no prose) whose "
-        f"keys are exactly {keys}. Each value is an object "
-        f'{{"score": <int>, "note": "<one concise sentence>"}}. '
-        f"Base every score strictly on the texts shown; do not reward or "
-        f"penalise length. Keep each note under 25 words."
-    )
-
-
-def _judge_prompt(source: str, translation: str, language: str) -> str:
-    """Build the judge user message carrying the source/translation pair."""
-    return f"SOURCE (English):\n{source}\n\nTRANSLATION ({language}):\n{translation}"
-
-
-def _parse_judgement(content: str) -> tuple[dict[str, int], dict[str, str]]:
-    """Parse the judge's JSON reply into score and note maps.
-
-    Raises:
-        ValueError: if no JSON object can be extracted or a dimension/score is
-            malformed.
-        KeyError: if a required dimension is absent.
-    """
-    data = _extract_json(content)
-    scores: dict[str, int] = {}
-    notes: dict[str, str] = {}
-    for dimension in _DIMENSIONS:
-        entry = data[dimension]  # KeyError if a dimension is missing.
-        if not isinstance(entry, dict) or "score" not in entry:
-            raise ValueError(f"Malformed entry for dimension '{dimension}'.")
-        scores[dimension] = _clamp_score(entry["score"])
-        notes[dimension] = str(entry.get("note", "")).strip()
-    return scores, notes
-
-
-def _extract_json(content: str) -> dict[str, object]:
-    """Extract the first JSON object from ``content`` (tolerating code fences)."""
-    text = content.strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise ValueError("No JSON object found in the judge response.")
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError as error:
-            raise ValueError(f"Invalid JSON in the judge response: {error}") from error
-    if not isinstance(parsed, dict):
-        raise ValueError("The judge response was not a JSON object.")
-    return parsed
-
-
-def _clamp_score(value: object) -> int:
-    """Coerce ``value`` to an int clamped to the valid score range."""
-    try:
-        score = int(value)
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"Score {value!r} is not an integer.") from error
-    return max(_SCORE_MIN, min(_SCORE_MAX, score))
-
-
-def _render_markdown(report: EvaluationReport) -> str:
-    """Render ``report`` as a Markdown document."""
-    lines = [
-        f"# Translation quality report — {report.language}",
-        "",
-        f"- **Judge model:** `{report.judge_model}`",
-        f"- **Translation model:** `{report.translation_model}`",
-        f"- **Chunks judged:** {report.sample_size} of {report.total_chunks}",
-        f"- **Overall score:** {report.overall_mean():.2f} / {_SCORE_MAX}",
-        "",
-        "## Scores by dimension",
-        "",
-        "| Dimension | Mean score |",
-        "| --- | --- |",
-    ]
-    for dimension, value in report.dimension_means().items():
-        lines.append(f"| {dimension} | {value:.2f} |")
-
-    lines += ["", "## Weakest sampled chunks", ""]
-    for evaluation in report.weakest_chunks():
-        detail = ", ".join(f"{dim} {evaluation.scores[dim]}" for dim in _DIMENSIONS)
-        lines.append(
-            f"- **Chunk {evaluation.index}** (mean {evaluation.mean:.2f}): {detail}"
-        )
-        for dimension in _DIMENSIONS:
-            note = evaluation.notes[dimension]
-            if note:
-                lines.append(f"  - _{dimension}:_ {note}")
-
-    lines.append("")
-    return "\n".join(lines)
