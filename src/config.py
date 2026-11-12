@@ -28,6 +28,10 @@ DEFAULT_BASE_URL = "https://api.sea-lion.ai/v1"
 DEFAULT_MODEL = "aisingapore/Gemma-SEA-LION-v4-27B-IT"
 DEFAULT_TIMEOUT = 120.0
 
+# Assumed model context window (tokens). Optimistic default; the translator
+# degrades (splits chunks) when a call fails, so an over-estimate is safe.
+DEFAULT_CONTEXT_WINDOW = 128_000
+
 # Source book to translate (Project Gutenberg plain-text URL).
 DEFAULT_BOOK_URL = "https://www.gutenberg.org/cache/epub/16317/pg16317.txt"
 
@@ -46,15 +50,22 @@ class Config:
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
     timeout: float = DEFAULT_TIMEOUT
+    context_window: int = DEFAULT_CONTEXT_WINDOW
     book_url: str = DEFAULT_BOOK_URL
 
 
-def load_config(target_language: str | None = None) -> Config:
-    """Build a Config, reading secrets and settings from the environment.
+def load_config(
+    target_language: str | None = None,
+    book_url: str | None = None,
+) -> Config:
+    """Build a Config from the environment plus command-line arguments.
+
+    The API key and operational settings come from the environment (`.env`);
+    the target language and source book are supplied on the command line.
 
     Args:
-        target_language: Language code supplied on the command line; falls
-            back to the default when not given.
+        target_language: Language code from the CLI; falls back to the default.
+        book_url: Source book URL from the CLI; falls back to the default.
 
     Returns:
         A populated Config instance.
@@ -75,5 +86,8 @@ def load_config(target_language: str | None = None) -> Config:
         base_url=os.getenv("SEA_LION_BASE_URL") or DEFAULT_BASE_URL,
         model=os.getenv("SEA_LION_MODEL") or DEFAULT_MODEL,
         timeout=float(os.getenv("SEA_LION_TIMEOUT") or DEFAULT_TIMEOUT),
-        book_url=os.getenv("BOOK_URL") or DEFAULT_BOOK_URL,
+        context_window=int(
+            os.getenv("SEA_LION_CONTEXT_WINDOW") or DEFAULT_CONTEXT_WINDOW
+        ),
+        book_url=book_url or DEFAULT_BOOK_URL,
     )
