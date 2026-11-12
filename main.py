@@ -11,13 +11,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 from src.config import SUPPORTED_LANGUAGES, load_config, load_judge_config
 from src.downloader import download_to_file
 from src.evaluator import DEFAULT_SAMPLE_SIZE, evaluate_translation
 from src.gutenberg import strip_boilerplate
-from src.translator import translate_text
+from src.translator import TranslationFailedError, translate_text
 
 # Where the downloaded source book is cached, and the default output template.
 _SOURCE_CACHE = "output/source.txt"
@@ -28,6 +29,9 @@ _JUDGE_REPORT_TEMPLATE = "output/{language}/judge_report"
 
 # Directory for the resumable per-chunk translation cache (git-ignored).
 _TRANSLATION_CACHE_DIR = "processing/translation_cache"
+
+# Default number of whole-book translation passes (initial + retries).
+_DEFAULT_MAX_ATTEMPTS = 3
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -75,6 +79,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "(translate every chunk afresh).",
     )
     parser.add_argument(
+        "--max-attempts",
+        type=_positive_int,
+        default=_DEFAULT_MAX_ATTEMPTS,
+        metavar="N",
+        help="Whole-book translation passes before giving up "
+        f"(initial + retries; default: {_DEFAULT_MAX_ATTEMPTS}).",
+    )
+    parser.add_argument(
         "--judge",
         action="store_true",
         help="After translating, score a sample of chunks with the Gemini "
@@ -106,7 +118,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> None:
     """Run the book-translation pipeline from command-line arguments."""
     args = parse_args()
-    asyncio.run(_run(args))
+    try:
+        asyncio.run(_run(args))
+    except TranslationFailedError as error:
+        print(f"\nError: {error}", file=sys.stderr)
+        print(
+            "No output file written. Cached progress is preserved — rerun to resume.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from error
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -126,7 +146,9 @@ async def _run(args: argparse.Namespace) -> None:
     print(f"Translating {len(text):,} characters to {language} ...")
 
     cache_dir = None if args.no_cache else _TRANSLATION_CACHE_DIR
-    translated = await translate_text(text, config, cache_dir=cache_dir)
+    translated = await translate_text(
+        text, config, cache_dir=cache_dir, max_attempts=args.max_attempts
+    )
 
     output_path = Path(
         args.output or _OUTPUT_TEMPLATE.format(language=config.target_language)
@@ -169,6 +191,17 @@ async def _judge(args: argparse.Namespace, config, text: str) -> None:
         f"across {report.sample_size} chunks ({language}). "
         f"Reports: {md_path}, {json_path}"
     )
+
+
+def _positive_int(value: str) -> int:
+    """Parse a CLI integer that must be >= 1 (argparse ``type``)."""
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer.") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1.")
+    return number
 
 
 if __name__ == "__main__":
