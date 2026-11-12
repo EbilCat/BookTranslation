@@ -1,3 +1,7 @@
+# Project generated artifacts (downloaded book, chunk cache, translations)
+output/
+processing/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
