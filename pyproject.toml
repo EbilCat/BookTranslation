@@ -1,7 +1,7 @@
 [project]
 name = "booktranslation"
 version = "0.1.0"
-description = "Add your description here"
+description = "Translate public-domain Project Gutenberg books into Southeast Asian languages using the SEA-LION API."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
