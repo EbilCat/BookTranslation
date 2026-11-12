@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
 from src.config import SUPPORTED_LANGUAGES, load_config
 from src.downloader import download_to_file
 from src.gutenberg import strip_boilerplate
-from src.translator import translate_text
+from src.translator import TranslationFailedError, translate_text
 
 # Where the downloaded source book is cached, and the default output template.
 _SOURCE_CACHE = "output/source.txt"
@@ -21,6 +22,9 @@ _OUTPUT_TEMPLATE = "output/{language}/translated_{language}.txt"
 
 # Directory for the resumable per-chunk translation cache (git-ignored).
 _TRANSLATION_CACHE_DIR = "processing/translation_cache"
+
+# Default number of whole-book translation passes (initial + retries).
+_DEFAULT_MAX_ATTEMPTS = 3
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -49,8 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-o",
         "--output",
         default=None,
-        help="Output file path "
-        "(default: output/<language>/translated_<language>.txt).",
+        help="Output file path (default: output/<language>/translated_<language>.txt).",
     )
     parser.add_argument(
         "--force-download",
@@ -68,13 +71,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the resumable per-chunk translation cache "
         "(translate every chunk afresh).",
     )
+    parser.add_argument(
+        "--max-attempts",
+        type=_positive_int,
+        default=_DEFAULT_MAX_ATTEMPTS,
+        metavar="N",
+        help="Whole-book translation passes before giving up "
+        f"(initial + retries; default: {_DEFAULT_MAX_ATTEMPTS}).",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     """Run the book-translation pipeline from command-line arguments."""
     args = parse_args()
-    asyncio.run(_run(args))
+    try:
+        asyncio.run(_run(args))
+    except TranslationFailedError as error:
+        print(f"\nError: {error}", file=sys.stderr)
+        print(
+            "No output file written. Cached progress is preserved — rerun to resume.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from error
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -94,7 +113,9 @@ async def _run(args: argparse.Namespace) -> None:
     print(f"Translating {len(text):,} characters to {language} ...")
 
     cache_dir = None if args.no_cache else _TRANSLATION_CACHE_DIR
-    translated = await translate_text(text, config, cache_dir=cache_dir)
+    translated = await translate_text(
+        text, config, cache_dir=cache_dir, max_attempts=args.max_attempts
+    )
 
     output_path = Path(
         args.output or _OUTPUT_TEMPLATE.format(language=config.target_language)
@@ -102,6 +123,17 @@ async def _run(args: argparse.Namespace) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(translated, encoding="utf-8", newline="\n")
     print(f"Wrote translation to {output_path}")
+
+
+def _positive_int(value: str) -> int:
+    """Parse a CLI integer that must be >= 1 (argparse ``type``)."""
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer.") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1.")
+    return number
 
 
 if __name__ == "__main__":
