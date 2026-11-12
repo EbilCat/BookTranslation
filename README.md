@@ -145,13 +145,6 @@ A few choices worth calling out, with the reasoning behind them:
   chunks and scores a per-dimension rubric (accuracy, fluency, completeness,
   tone), which is more diagnostic than a single number.
 
-- **Pure core, imperative shell — built to be tested.** Decision logic (token
-  budgeting, retry classification, chunking, judge-reply parsing, score
-  aggregation) lives in pure, I/O-free functions separate from the async API
-  calls, so the test suite exercises it offline with no key or network. `Config`
-  rejects an unsupported language at construction, making an invalid target
-  unrepresentable rather than failing deep inside a request.
-
 ## Running the tests
 
 ```bash
