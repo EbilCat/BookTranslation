@@ -17,7 +17,7 @@ from src.translator import translate_text
 
 # Where the downloaded source book is cached, and the default output template.
 _SOURCE_CACHE = "output/source.txt"
-_OUTPUT_TEMPLATE = "output/translated_{language}.txt"
+_OUTPUT_TEMPLATE = "output/{language}/translated_{language}.txt"
 
 # Directory for the resumable per-chunk translation cache (git-ignored).
 _TRANSLATION_CACHE_DIR = "processing/translation_cache"
@@ -49,7 +49,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-o",
         "--output",
         default=None,
-        help="Output file path (default: output/translated_<language>.txt).",
+        help="Output file path "
+        "(default: output/<language>/translated_<language>.txt).",
     )
     parser.add_argument(
         "--force-download",
