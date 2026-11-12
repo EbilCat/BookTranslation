@@ -8,9 +8,10 @@ fit the context window), the chunk is split and retried ("degrade on failure").
 Results carry their index so the text is reassembled in order.
 
 Chunk failures are handled in whole-book passes: a pass lets every chunk run to
-completion (one flaky chunk no longer aborts the book), and if any chunk failed
-on a *transient* error (timeout, rate limit, 5xx) the whole book is retried, up
-to ``max_attempts`` passes. Chunks that already succeeded are skipped on retry
+completion (so one flaky chunk does not abort the whole book), and if any chunk
+failed on a *transient* error (timeout, rate limit, 5xx) the whole book is
+retried, up to ``max_attempts`` passes. Chunks that already succeeded are
+skipped on retry
 (kept in memory and, when enabled, on disk via the cache), so a retry pass only
 re-attempts the stragglers. A *permanent* failure (e.g. a single paragraph that
 cannot be split, or an auth error) aborts immediately rather than wasting
@@ -104,7 +105,7 @@ async def translate_text(
     """Translate plain text and return the reassembled translation.
 
     The book is translated in whole-book passes. Within a pass every chunk runs
-    to completion, so a single flaky chunk no longer aborts the book. If chunks
+    to completion, so a single flaky chunk does not abort the whole book. If chunks
     fail only on transient errors, the book is retried (up to ``max_attempts``
     passes); chunks already translated are skipped, so a retry pass re-attempts
     only the stragglers. A permanent failure aborts immediately.
