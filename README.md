@@ -111,6 +111,47 @@ defaults. See [`.env.example`](.env.example) for the full list (base URLs,
 timeouts, model, context window, and the judge model/endpoint). Target language
 and book URL are **CLI arguments**, not env vars.
 
+## Design decisions
+
+A few choices worth calling out, with the reasoning behind them:
+
+- **The rate limit, not the context window, is the real bottleneck.** SEA-LION
+  allows ~10 requests/minute, and translating a ~240K-token book one paragraph
+  per call would take hours. The chunker greedily batches whole paragraphs
+  (never splitting one mid-sentence) up to a token budget to minimise call
+  count, and the translator runs chunks concurrently under a shared limiter that
+  caps request *starts* at 10/min — saturating the budget instead of wasting it
+  on slow sequential calls.
+
+- **Resumable, content-addressed cache.** Each chunk's translation is cached on
+  disk keyed by `sha256(cache_version, language, model, chunk_text)` — not by
+  position. A hit is therefore only possible for a byte-identical request, so
+  changing the language, model, or chunking misses and re-translates rather than
+  silently reusing a stale result. Writes are atomic (temp file + `os.replace`),
+  so an interrupted run resumes cleanly and never trusts a half-written file.
+
+- **Degrade on failure, and fail loud — never a silently-incomplete book.** A
+  chunk that truncates or won't fit is split and retried; the whole book runs in
+  passes so one flaky chunk doesn't sink it, retrying only transient failures
+  (timeout / 429 / 5xx) and aborting immediately on permanent ones (auth, a
+  single unsplittable paragraph). If any chunk is still missing after the final
+  pass, the run exits non-zero and writes **no** output file — a loud failure is
+  safer than a translation that looks complete but has gaps.
+
+- **Reference-free LLM-as-a-judge on a separate provider.** The optional
+  `--judge` step scores quality with Google Gemini rather than SEA-LION: a
+  different provider avoids self-evaluation bias (a model grading its own output
+  skews lenient) and keeps judging off the translation rate budget. It samples
+  chunks and scores a per-dimension rubric (accuracy, fluency, completeness,
+  tone), which is more diagnostic than a single number.
+
+- **Pure core, imperative shell — built to be tested.** Decision logic (token
+  budgeting, retry classification, chunking, judge-reply parsing, score
+  aggregation) lives in pure, I/O-free functions separate from the async API
+  calls, so the test suite exercises it offline with no key or network. `Config`
+  rejects an unsupported language at construction, making an invalid target
+  unrepresentable rather than failing deep inside a request.
+
 ## Running the tests
 
 ```bash
