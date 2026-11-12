@@ -111,6 +111,37 @@ defaults. See [`.env.example`](.env.example) for the full list (base URLs,
 timeouts, model, context window, and the judge model/endpoint). Target language
 and book URL are **CLI arguments**, not env vars.
 
+## Project structure
+
+```text
+BookTranslation/
+├── main.py                    # CLI entry point: download → translate → write (+ optional judge)
+├── src/
+│   ├── config.py              # Settings & secrets from env/.env; target-language validation
+│   ├── downloader.py          # Fetch a plain-text book, with an on-disk cache
+│   ├── gutenberg.py           # Strip Project Gutenberg START/END boilerplate
+│   ├── chunker.py             # Split text into paragraph-aligned, token-budgeted chunks
+│   ├── ratelimit.py           # Async limiter capping request starts per rolling minute
+│   ├── inference.py           # AsyncOpenAI client + one SEA-LION chat completion
+│   ├── translation_policy.py  # Pure translator decisions (token budget, retry/backoff, split)
+│   ├── translator.py          # Orchestrates concurrent, resumable, retrying translation
+│   ├── cache.py               # Content-addressed on-disk cache of translated chunks
+│   ├── judge_rubric.py        # Judge grading spec, prompts & reply parsing (pure)
+│   ├── evaluation_report.py   # Evaluation data model + JSON/Markdown rendering (pure)
+│   └── evaluator.py           # LLM-as-a-judge orchestration (Gemini)
+├── tests/                     # Offline unit tests for the pure logic (pytest)
+├── .env.example               # Template for required/optional environment variables
+├── pyproject.toml             # Project metadata, dependencies & tooling config
+└── uv.lock                    # Pinned dependency lockfile
+```
+
+Created at runtime and git-ignored:
+
+```text
+output/        # translated book + judge reports (the deliverables)
+processing/    # downloaded source book + per-chunk resume cache
+```
+
 ## Design decisions
 
 A few choices worth calling out, with the reasoning behind them:
