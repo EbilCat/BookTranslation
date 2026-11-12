@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import openai
 
-from src.config import SUPPORTED_LANGUAGES, Config
+from src.config import Config
 
 __all__ = [
     "TRANSIENT_ERRORS",
@@ -77,7 +77,7 @@ def plan_output_budget(input_tokens: int, context_window: int) -> int | None:
 
 def build_system_prompt(config: Config) -> str:
     """Build the translation system prompt for the configured language."""
-    language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
+    language = config.language_name
     return (
         f"You are a professional literary translator. Translate the user's "
         f"text into {language}. Preserve the original meaning, tone, paragraph "

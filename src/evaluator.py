@@ -32,7 +32,7 @@ from openai import AsyncOpenAI
 
 from src.cache import ChunkCache
 from src.chunker import chunk_text
-from src.config import SUPPORTED_LANGUAGES, Config, JudgeConfig
+from src.config import Config, JudgeConfig
 from src.ratelimit import RateLimiter
 
 __all__ = [
@@ -262,7 +262,7 @@ async def evaluate_translation(
         )
 
     sample = _sample(pairs, sample_size, seed)
-    language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
+    language = config.language_name
     client = build_judge_client(judge)
     limiter = RateLimiter(_JUDGE_RATE_LIMIT_RPM)
     semaphore = asyncio.Semaphore(_JUDGE_MAX_CONCURRENCY)

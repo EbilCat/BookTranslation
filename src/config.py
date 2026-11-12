@@ -71,6 +71,30 @@ class Config:
     context_window: int = DEFAULT_CONTEXT_WINDOW
     book_url: str = DEFAULT_BOOK_URL
 
+    def __post_init__(self) -> None:
+        """Reject an unsupported target language at construction time.
+
+        Validating here (rather than only in the CLI's argparse ``choices``)
+        makes "a Config always has a supported language" an invariant for every
+        construction path -- direct ``Config(...)``, tests, library use -- so
+        downstream code can look the name up without a fallback.
+
+        Raises:
+            ValueError: if ``target_language`` is not a key in
+                ``SUPPORTED_LANGUAGES``.
+        """
+        if self.target_language not in SUPPORTED_LANGUAGES:
+            supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
+            raise ValueError(
+                f"Unsupported target language {self.target_language!r}. "
+                f"Choose one of: {supported}."
+            )
+
+    @property
+    def language_name(self) -> str:
+        """Full name of the configured target language (e.g. ``'Thai'``)."""
+        return SUPPORTED_LANGUAGES[self.target_language]
+
 
 @dataclass(frozen=True)
 class JudgeConfig:

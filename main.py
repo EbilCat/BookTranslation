@@ -132,7 +132,7 @@ def main() -> None:
 async def _run(args: argparse.Namespace) -> None:
     """Execute the download -> translate -> write pipeline."""
     config = load_config(target_language=args.language, book_url=args.book_url)
-    language = SUPPORTED_LANGUAGES[config.target_language]
+    language = config.language_name
 
     print(f"Downloading book from {config.book_url} ...")
     text = download_to_file(
@@ -164,7 +164,7 @@ async def _run(args: argparse.Namespace) -> None:
 async def _judge(args: argparse.Namespace, config, text: str) -> None:
     """Run the LLM-as-a-judge evaluation and write a quality report."""
     judge_config = load_judge_config()
-    language = SUPPORTED_LANGUAGES[config.target_language]
+    language = config.language_name
     print(f"Judging up to {args.judge_sample} chunks with {judge_config.model} ...")
     report = await evaluate_translation(
         text,

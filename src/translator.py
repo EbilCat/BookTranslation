@@ -26,7 +26,7 @@ from pathlib import Path
 
 from src.cache import ChunkCache
 from src.chunker import chunk_text, estimate_tokens
-from src.config import SUPPORTED_LANGUAGES, Config
+from src.config import Config
 from src.inference import (
     TranslationTruncatedError,
     build_client,
@@ -133,7 +133,7 @@ async def translate_text(
 
     chunks = chunk_text(text)
     system = build_system_prompt(config)
-    language = SUPPORTED_LANGUAGES.get(config.target_language, config.target_language)
+    language = config.language_name
     cache = (
         ChunkCache(
             cache_dir,
