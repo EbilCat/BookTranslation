@@ -74,25 +74,3 @@ async def run_inference(
             f"Response truncated at max_tokens={max_tokens}."
         )
     return choice.message.content or ""
-
-
-async def test_inference() -> str:
-    """Smoke test: load config, query the model, and print the reply."""
-    from src.config import load_config
-
-    config = load_config()
-    client = build_client(config)
-    try:
-        reply = await run_inference(
-            client, "How many days are there in a year?", config
-        )
-    finally:
-        await client.close()
-    print(reply)
-    return reply
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(test_inference())
