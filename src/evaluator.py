@@ -64,10 +64,6 @@ _JUDGE_PARSE_RETRIES = 1
 DEFAULT_SAMPLE_SIZE = 8
 
 
-class JudgeError(RuntimeError):
-    """Raised when the judge cannot produce a usable evaluation."""
-
-
 def build_judge_client(judge: JudgeConfig) -> AsyncOpenAI:
     """Create an AsyncOpenAI client pointed at the judge provider (Gemini)."""
     return AsyncOpenAI(
@@ -170,6 +166,10 @@ async def evaluate_translation(
         total_chunks=total_chunks,
         evaluations=list(evaluations),
     )
+
+
+class JudgeError(RuntimeError):
+    """Raised when the judge cannot produce a usable evaluation."""
 
 
 def _sample(

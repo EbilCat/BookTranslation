@@ -54,47 +54,6 @@ _RATE_LIMIT_RPM = 10
 _MAX_CONCURRENCY = 10
 
 
-class TranslationFailedError(RuntimeError):
-    """Raised when some chunks could not be translated after all passes.
-
-    Attributes:
-        language: Target language name (for the message).
-        failed_indices: Sorted chunk indices that never succeeded.
-        attempts: Number of whole-book passes attempted.
-        recoverable: True if every remaining failure was transient (a later
-            rerun may succeed); False if at least one failure was permanent.
-        last_error: A representative underlying exception, if any.
-    """
-
-    def __init__(
-        self,
-        language: str,
-        failed_indices: list[int],
-        attempts: int,
-        *,
-        recoverable: bool,
-        last_error: BaseException | None = None,
-    ) -> None:
-        """Build the error and its human-readable message."""
-        self.language = language
-        self.failed_indices = sorted(failed_indices)
-        self.attempts = attempts
-        self.recoverable = recoverable
-        self.last_error = last_error
-        shown = ", ".join(f"#{i}" for i in self.failed_indices)
-        kind = "transient" if recoverable else "unrecoverable"
-        detail = (
-            f"{type(last_error).__name__}: {last_error}"
-            if last_error is not None
-            else "unknown error"
-        )
-        super().__init__(
-            f"Translation to {language} failed after {attempts} attempt(s): "
-            f"{len(self.failed_indices)} chunk(s) could not be translated "
-            f"({kind}): {shown}. Last error: {detail}."
-        )
-
-
 async def translate_text(
     text: str,
     config: Config,
@@ -163,6 +122,47 @@ async def translate_text(
         await asyncio.sleep(backoff_seconds(attempt))
 
     return "\n\n".join(translations[i] for i in range(len(chunks)))
+
+
+class TranslationFailedError(RuntimeError):
+    """Raised when some chunks could not be translated after all passes.
+
+    Attributes:
+        language: Target language name (for the message).
+        failed_indices: Sorted chunk indices that never succeeded.
+        attempts: Number of whole-book passes attempted.
+        recoverable: True if every remaining failure was transient (a later
+            rerun may succeed); False if at least one failure was permanent.
+        last_error: A representative underlying exception, if any.
+    """
+
+    def __init__(
+        self,
+        language: str,
+        failed_indices: list[int],
+        attempts: int,
+        *,
+        recoverable: bool,
+        last_error: BaseException | None = None,
+    ) -> None:
+        """Build the error and its human-readable message."""
+        self.language = language
+        self.failed_indices = sorted(failed_indices)
+        self.attempts = attempts
+        self.recoverable = recoverable
+        self.last_error = last_error
+        shown = ", ".join(f"#{i}" for i in self.failed_indices)
+        kind = "transient" if recoverable else "unrecoverable"
+        detail = (
+            f"{type(last_error).__name__}: {last_error}"
+            if last_error is not None
+            else "unknown error"
+        )
+        super().__init__(
+            f"Translation to {language} failed after {attempts} attempt(s): "
+            f"{len(self.failed_indices)} chunk(s) could not be translated "
+            f"({kind}): {shown}. Last error: {detail}."
+        )
 
 
 def _plan_retry(

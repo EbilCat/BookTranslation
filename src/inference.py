@@ -19,10 +19,6 @@ __all__ = ["build_client", "run_inference", "TranslationTruncatedError"]
 _MAX_RETRIES = 5
 
 
-class TranslationTruncatedError(RuntimeError):
-    """Raised when the model stops because it hit the output token cap."""
-
-
 def build_client(config: Config) -> AsyncOpenAI:
     """Create an AsyncOpenAI client pointed at the SEA-LION API."""
     return AsyncOpenAI(
@@ -74,3 +70,7 @@ async def run_inference(
             f"Response truncated at max_tokens={max_tokens}."
         )
     return choice.message.content or ""
+
+
+class TranslationTruncatedError(RuntimeError):
+    """Raised when the model stops because it hit the output token cap."""

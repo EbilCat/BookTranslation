@@ -59,53 +59,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
 
-@dataclass(frozen=True)
-class Config:
-    """Resolved, immutable application settings."""
-
-    api_key: str
-    target_language: str = DEFAULT_TARGET_LANGUAGE
-    base_url: str = DEFAULT_BASE_URL
-    model: str = DEFAULT_MODEL
-    timeout: float = DEFAULT_TIMEOUT
-    context_window: int = DEFAULT_CONTEXT_WINDOW
-    book_url: str = DEFAULT_BOOK_URL
-
-    def __post_init__(self) -> None:
-        """Reject an unsupported target language at construction time.
-
-        Validating here (rather than only in the CLI's argparse ``choices``)
-        makes "a Config always has a supported language" an invariant for every
-        construction path -- direct ``Config(...)``, tests, library use -- so
-        downstream code can look the name up without a fallback.
-
-        Raises:
-            ValueError: if ``target_language`` is not a key in
-                ``SUPPORTED_LANGUAGES``.
-        """
-        if self.target_language not in SUPPORTED_LANGUAGES:
-            supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
-            raise ValueError(
-                f"Unsupported target language {self.target_language!r}. "
-                f"Choose one of: {supported}."
-            )
-
-    @property
-    def language_name(self) -> str:
-        """Full name of the configured target language (e.g. ``'Thai'``)."""
-        return SUPPORTED_LANGUAGES[self.target_language]
-
-
-@dataclass(frozen=True)
-class JudgeConfig:
-    """Resolved settings for the translation-quality judge (Gemini)."""
-
-    api_key: str
-    base_url: str = JUDGE_DEFAULT_BASE_URL
-    model: str = JUDGE_DEFAULT_MODEL
-    timeout: float = JUDGE_DEFAULT_TIMEOUT
-
-
 def load_config(
     target_language: str | None = None,
     book_url: str | None = None,
@@ -170,3 +123,50 @@ def load_judge_config() -> JudgeConfig:
         model=os.getenv("JUDGE_MODEL") or JUDGE_DEFAULT_MODEL,
         timeout=float(os.getenv("JUDGE_TIMEOUT") or JUDGE_DEFAULT_TIMEOUT),
     )
+
+
+@dataclass(frozen=True)
+class Config:
+    """Resolved, immutable application settings."""
+
+    api_key: str
+    target_language: str = DEFAULT_TARGET_LANGUAGE
+    base_url: str = DEFAULT_BASE_URL
+    model: str = DEFAULT_MODEL
+    timeout: float = DEFAULT_TIMEOUT
+    context_window: int = DEFAULT_CONTEXT_WINDOW
+    book_url: str = DEFAULT_BOOK_URL
+
+    def __post_init__(self) -> None:
+        """Reject an unsupported target language at construction time.
+
+        Validating here (rather than only in the CLI's argparse ``choices``)
+        makes "a Config always has a supported language" an invariant for every
+        construction path -- direct ``Config(...)``, tests, library use -- so
+        downstream code can look the name up without a fallback.
+
+        Raises:
+            ValueError: if ``target_language`` is not a key in
+                ``SUPPORTED_LANGUAGES``.
+        """
+        if self.target_language not in SUPPORTED_LANGUAGES:
+            supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
+            raise ValueError(
+                f"Unsupported target language {self.target_language!r}. "
+                f"Choose one of: {supported}."
+            )
+
+    @property
+    def language_name(self) -> str:
+        """Full name of the configured target language (e.g. ``'Thai'``)."""
+        return SUPPORTED_LANGUAGES[self.target_language]
+
+
+@dataclass(frozen=True)
+class JudgeConfig:
+    """Resolved settings for the translation-quality judge (Gemini)."""
+
+    api_key: str
+    base_url: str = JUDGE_DEFAULT_BASE_URL
+    model: str = JUDGE_DEFAULT_MODEL
+    timeout: float = JUDGE_DEFAULT_TIMEOUT
