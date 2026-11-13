@@ -25,6 +25,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+from openai import AsyncOpenAI
+
 from src.cache import ChunkCache
 from src.chunker import chunk_text, estimate_tokens
 from src.config import Config
@@ -300,7 +302,7 @@ async def _run_pass(
 
 
 async def _translate_chunk(
-    client,
+    client: AsyncOpenAI,
     chunk: str,
     config: Config,
     system: str,
@@ -343,7 +345,7 @@ async def _translate_chunk(
 
 
 async def _split_and_retry(
-    client,
+    client: AsyncOpenAI,
     chunk: str,
     config: Config,
     system: str,

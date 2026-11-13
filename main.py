@@ -14,7 +14,7 @@ import json
 import sys
 from pathlib import Path
 
-from src.config import SUPPORTED_LANGUAGES, load_config, load_judge_config
+from src.config import SUPPORTED_LANGUAGES, Config, load_config, load_judge_config
 from src.downloader import download_cached
 from src.evaluator import DEFAULT_SAMPLE_SIZE, evaluate_translation
 from src.gutenberg import strip_boilerplate
@@ -163,7 +163,7 @@ async def _run(args: argparse.Namespace) -> None:
         await _judge(args, config, text)
 
 
-async def _judge(args: argparse.Namespace, config, text: str) -> None:
+async def _judge(args: argparse.Namespace, config: Config, text: str) -> None:
     """Run the LLM-as-a-judge evaluation and write a quality report."""
     judge_config = load_judge_config()
     language = config.language_name
