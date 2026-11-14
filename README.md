@@ -142,6 +142,27 @@ output/        # translated book + judge reports (the deliverables)
 processing/    # downloaded source book + per-chunk resume cache
 ```
 
+## How it works
+
+The code follows a *pure core, imperative shell* split so the decision logic is
+testable without the network:
+
+| Module | Responsibility | I/O? |
+| --- | --- | --- |
+| `src/config.py` | Resolve settings & secrets from env/`.env`; validate the target language | pure |
+| `src/downloader.py` | Fetch a plain-text book, with an on-disk cache | network / disk |
+| `src/gutenberg.py` | Strip Project Gutenberg START/END boilerplate | pure |
+| `src/chunker.py` | Split text into paragraph-aligned, token-budgeted chunks | pure |
+| `src/ratelimit.py` | Cap request starts per rolling minute (shared limiter) | pure (async) |
+| `src/inference.py` | One SEA-LION chat completion via `AsyncOpenAI` | network |
+| `src/translation_policy.py` | Token budget, retry/backoff, and chunk-split decisions | pure |
+| `src/translator.py` | Orchestrate concurrent, resumable, retrying translation | shell |
+| `src/cache.py` | Content-addressed on-disk cache of translated chunks | disk |
+| `src/judge_rubric.py` | Judge grading spec, prompts, and reply parsing | pure |
+| `src/evaluation_report.py` | Evaluation data model + JSON/Markdown rendering | pure |
+| `src/evaluator.py` | LLM-as-a-judge orchestration (Gemini) | network |
+| `main.py` | Wire the pipeline together | shell |
+
 ## Design decisions
 
 A few choices worth calling out, with the reasoning behind them:
@@ -176,7 +197,9 @@ A few choices worth calling out, with the reasoning behind them:
   chunks and scores a per-dimension rubric (accuracy, fluency, completeness,
   tone), which is more diagnostic than a single number.
 
-## Running the tests
+## Development
+
+Run the test suite (all tests are offline — no API key or network required):
 
 ```bash
 uv run pytest
@@ -184,4 +207,16 @@ uv run pytest
 
 The suite covers the pure, I/O-free logic (chunking, token budgeting, retry
 classification, judge-reply parsing, score aggregation, config validation,
-caching) and runs offline — no API key or network required.
+caching).
+
+Lint, format, and type-check:
+
+```bash
+uv run ruff check .      # lint + import sort
+uv run ruff format .     # format
+uv run mypy              # type-checks the shipped code (src/ and main.py)
+```
+
+Continuous integration (`.github/workflows/ci.yml`) runs `ruff check`,
+`ruff format --check`, mypy, and pytest on every push and pull request against
+Python 3.13.
