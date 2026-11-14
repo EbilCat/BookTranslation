@@ -14,6 +14,38 @@ of the translation for quality.
 Supported target languages: **Indonesian** (`id`, default), **Filipino**
 (`fil`), **Tamil** (`ta`), **Thai** (`th`), **Vietnamese** (`vi`).
 
+## Scope
+
+The core of the assignment is small: download the book, translate it into a
+configurable Southeast Asian language with the SEA-LION API, and write the
+result to a local file. That path is `uv run main.py --language <code>` and is
+complete on its own. The work around it follows two convictions.
+
+**Don't run an LLM more than necessary.** Every call costs time and money, and on
+a full-length book that adds up fast — so the design avoids wasted calls at every
+step:
+
+- the resumable, content-addressed cache means an interrupted run never
+  re-translates (and re-pays for) a chunk it already finished;
+- paragraph-aware chunking batches text up to a token budget and runs chunks
+  concurrently under a shared limiter, minimising the number of calls against
+  SEA-LION's ~10-requests/minute limit;
+- the judge scores a random *sample* of chunks, not every one — enough signal
+  without doubling the spend.
+
+**With no native speakers to validate, measure quality instead of assuming it.**
+In a real system, fluent speakers of the target language would review the
+translation; here there are none, so there is no direct way to know whether the
+output is any good — or whether it worked at all. The optional `--judge` step is
+the stand-in: an independent model (Gemini, so it is not grading its own work)
+scores the translation against the source on a rubric. It is a proxy for human
+review, not a replacement, but it turns "looks done" into an actual, inspectable
+quality signal.
+
+The brief estimates ~2 hours for the core; the additions above are where the
+extra time went, and each is independently switchable (`--raw`, `--no-cache`,
+`--judge`, `--max-attempts`).
+
 ## Requirements
 
 - **Python 3.13+** (pinned in `pyproject.toml`)
