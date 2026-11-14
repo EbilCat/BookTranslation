@@ -115,7 +115,7 @@ def clamp_score(value: object) -> int:
     try:
         # ``value`` is an arbitrary JSON value; int() raises on anything not
         # coercible, which the except turns into a clear ValueError.
-        score = int(value)  # type: ignore[call-overload]
+        score: int = int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError) as error:
         raise ValueError(f"Score {value!r} is not an integer.") from error
     return max(SCORE_MIN, min(SCORE_MAX, score))

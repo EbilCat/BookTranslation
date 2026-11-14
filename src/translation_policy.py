@@ -54,7 +54,8 @@ def is_transient(error: BaseException) -> bool:
 
 def backoff_seconds(attempt: int) -> float:
     """Seconds to wait before the pass following a failed ``attempt``."""
-    return min(_RETRY_BACKOFF_BASE * 2 ** (attempt - 1), _RETRY_BACKOFF_CAP)
+    delay: float = _RETRY_BACKOFF_BASE * 2 ** (attempt - 1)
+    return min(delay, _RETRY_BACKOFF_CAP)
 
 
 def plan_output_budget(input_tokens: int, context_window: int) -> int | None:

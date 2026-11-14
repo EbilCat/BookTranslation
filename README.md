@@ -214,7 +214,7 @@ Lint, format, and type-check:
 ```bash
 uv run ruff check .      # lint + import sort
 uv run ruff format .     # format
-uv run mypy              # type-checks the shipped code (src/ and main.py)
+uv run mypy              # strict type-check of the shipped code (src/ and main.py)
 ```
 
 Continuous integration (`.github/workflows/ci.yml`) runs `ruff check`,
